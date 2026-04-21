@@ -1,0 +1,344 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{parskip}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue!60!black,
+    citecolor=black,
+}
+
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    breaklines=true,
+    columns=fullflexible,
+    frame=single,
+    framesep=4pt,
+    xleftmargin=6pt,
+    xrightmargin=6pt,
+}
+
+\title{Stem Agent: a self-specializing deep research agent for multi-hop QA}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+A stem agent is an agent that starts generic and specializes itself for a
+class of problems before executing on held-out instances of that class.
+This report describes a minimal stem agent for deep research on multi-hop
+factoid questions. The agent runs a ReAct-style loop over two tools
+(Wikipedia search and page fetch) and, before the real evaluation, spends a
+small compute budget studying a training split, distilling a
+\emph{specialization artifact} (a short JSON document containing a system
+prompt, query-style rules, source preferences, a stopping heuristic, and a
+handful of worked examples), and self-checking the candidate against its
+generic baseline. Only if the candidate clears a fixed margin is it
+promoted; otherwise it is archived as rejected. I evaluate the promoted
+agent against two controls, the generic baseline and a no-tools
+closed-book baseline, on a fixed 200-question subsample of the HotpotQA
+distractor dev set, using exact match and token F1.
+\end{abstract}
+
+\section{Problem framing}
+
+The task is open: build a small agent that can specialize itself. I picked
+multi-hop factoid QA because it has three properties that make it
+comfortable to reason about in a short project:
+
+\begin{enumerate}[leftmargin=*]
+    \item There is a clean, public, non-trivial dataset (HotpotQA) with
+          deterministic metrics (exact match and token-level F1) that are
+          standard in the literature.
+    \item The problem admits obvious tool use: search and page fetch over
+          Wikipedia, which is the same corpus HotpotQA was constructed
+          from, so the ceiling is high but not trivial under realistic
+          latency.
+    \item There is a clear, cheap way to specialize: observe how a handful
+          of questions in the class tend to decompose (bridge vs.
+          comparison, typical entity types, typical hop counts) and
+          compress that into a short prompt the agent reads before
+          answering.
+\end{enumerate}
+
+Concretely, ``specialization'' here means: after scouting a small training
+split, the agent rewrites its own system prompt and adds a few worked
+examples tuned for HotpotQA-shaped questions. The only thing that changes
+between the baseline and the specialized arm is the contents of one JSON
+artifact; the loop, tools, and model are identical.
+
+\section{Approach}
+
+\subsection{Agent loop}
+
+The core is a ReAct-style loop with three tools exposed to the model:
+\texttt{search(query)}, \texttt{open\_url(url)}, and \texttt{answer(text)}.
+The model is called with OpenAI function calling; on each turn it either
+requests a tool or emits a final answer. The loop caps hops at a fixed
+\texttt{max\_hops} (default 8) and records a trace of every tool call and
+observation. Tool errors are caught and fed back as observations rather
+than crashing the run, so the agent can recover from transient fetch
+failures.
+
+Both tools hit the MediaWiki API on the English Wikipedia; search uses the
+\texttt{list=search} endpoint (top 5 hits), and \texttt{open\_url} uses
+the \texttt{prop=extracts} endpoint with an HTML fallback parsed via
+BeautifulSoup when the extracts endpoint returns empty. Every network
+response is content-addressed and cached to disk, keyed by a hash of the
+query or URL, which makes the full pipeline cheap to re-run and
+deterministic under a fixed model seed modulo the provider.
+
+\subsection{Specialization as an artifact}
+
+The specialization artifact is a single JSON document with a fixed schema:
+
+\begin{itemize}[leftmargin=*]
+    \item \texttt{system\_prompt}: the replacement system message.
+    \item \texttt{query\_style\_rules}: short bullets on how to phrase
+          search queries for this class.
+    \item \texttt{source\_preferences}: a \texttt{prefer}/\texttt{avoid}
+          split over source types.
+    \item \texttt{stopping\_heuristic}: one sentence describing when to
+          stop searching and answer.
+    \item \texttt{typical\_hop\_count}: an integer prior on how many
+          hops this class of question usually needs.
+    \item \texttt{few\_shots}: a small list of $\{$question, trajectory,
+          answer$\}$ records.
+\end{itemize}
+
+At evaluation time, the specialized agent stitches these fields into a
+single system prompt and otherwise runs the exact same loop and tools as
+the baseline. Because the artifact is just JSON on disk, it is trivially
+inspectable, diffable, and reproducible.
+
+\subsection{Growth phase}
+
+The growth phase has three stages:
+
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Scout.} Run the baseline agent over a held-out
+          \emph{training} split of 10 questions, logging each trace
+          (questions, tool calls, observations, final answers, whether
+          they were correct). The scout trajectories are the only raw
+          material the distiller sees.
+    \item \textbf{Distill.} Ask the model to compress the scout
+          trajectories into the artifact JSON. The prompt spells out the
+          schema and the constraint that the artifact must be short and
+          class-general, not instance-specific. Output is JSON-parsed
+          and validated against the required keys; malformed candidates
+          are rejected up-front.
+    \item \textbf{Self-check and promotion.} Score both the baseline and
+          the candidate-specialized agent on a 30-question internal
+          split. The candidate is promoted only if its F1 beats the
+          baseline by at least \texttt{PROMOTION\_MARGIN} = 0.03;
+          otherwise it is moved to \texttt{data/artifacts/rejected/}
+          and the promotion file is left unchanged.
+\end{enumerate}
+
+The 10/30/160 split (scout / self-check / held-out test) is deterministic
+given the sample seed. The held-out test split is \emph{never} touched by
+the growth phase.
+
+\subsection{Controls}
+
+Two controls keep the comparison honest:
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Generic baseline.} Same loop, same tools, a plain
+          ``research assistant'' system prompt. This is what the
+          specialized agent has to beat.
+    \item \textbf{Closed-book.} Same model with no tools and no retrieval
+          at all, asked to answer directly. If the closed-book arm is
+          competitive, most of the apparent score is model memorization
+          of the Wikipedia corpus rather than the agent doing anything
+          useful. This is a sanity floor on contamination rather than a
+          real baseline.
+\end{itemize}
+
+\section{Evaluation protocol}
+
+\paragraph{Dataset.} I use a fixed 200-question subsample of the HotpotQA
+distractor development set, drawn with \texttt{numpy} seed 42. The
+subsample is committed to the repo (\texttt{data/hotpot\_sample.json}) so
+the evaluation is bit-for-bit reproducible. Of the 200, 170 are
+\emph{bridge} questions (chain two Wikipedia pages) and 30 are
+\emph{comparison} questions (compare two entities on an attribute).
+
+\paragraph{Splits.} A deterministic \texttt{make\_splits} divides the 200
+questions into 10 scout, 30 self-check, and 160 held-out test questions.
+Only the 160-question test split is reported in the main table.
+
+\paragraph{Metrics.} HotpotQA-style exact match and token F1, computed
+after lowercasing, stripping articles, and normalizing whitespace and
+punctuation. I also report average hops, average wall-clock seconds per
+question, count of fallback answers (the agent hit \texttt{max\_hops}
+without calling \texttt{answer}), and count of hard errors.
+
+\paragraph{Model.} \texttt{gpt-4o-mini} via the OpenAI Chat Completions
+API with tool calling. The model id is pinned in configuration. I do not
+sweep the model.
+
+\paragraph{Seeds.} The numbers reported below are from a single seed
+(seed 0) on the first 50 questions of the held-out test split, run
+under a constrained compute budget. The code supports multi-seed
+sweeps over the full 160-question split; extending the run to three
+seeds and the full split is a mechanical rerun of the same scripts
+and is listed as future work.
+
+\section{Results}
+
+\subsection{Main table}
+
+Table~\ref{tab:main} reports EM and F1 over the first 50 questions of
+the held-out test split at seed 0. All three arms see the same 50
+questions in the same order.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcccc}
+\toprule
+Arm & EM & F1 & Avg.\ hops & Avg.\ s/q \\
+\midrule
+Closed-book          & 0.200 & 0.337 & ---   & 0.70 \\
+Generic baseline     & 0.200 & 0.337 & 4.98  & 7.47 \\
+Specialized (growth) & \textbf{0.260} & \textbf{0.406} & 4.68 & 5.76 \\
+\bottomrule
+\end{tabular}
+\caption{Held-out evaluation on the first 50 HotpotQA distractor dev
+questions from the 160-question test split, seed 0. Closed-book makes
+no tool calls. Baseline logged 12 hard errors (mostly transient
+Wikipedia fetch failures, fed back to the agent as observations);
+specialized logged 8.}
+\label{tab:main}
+\end{table}
+
+Two things about this table are worth stating up front. First, the
+coincidence that closed-book and the generic baseline tie to three
+decimals is exactly that, a coincidence on 50 questions; the per-row
+CSVs show that the two arms get different questions right. Second,
+the specialized agent wins on both EM and F1 and is also faster per
+question, despite using the same loop, tools, and model. The only
+difference between baseline and specialized is the contents of the
+artifact JSON.
+
+\subsection{Growth phase diagnostics}
+
+During the growth phase I ran the self-check on a reduced 5-question
+subset of the self-check split to keep iteration cheap; the candidate
+scored F1 = \textbf{0.094} on that subset and was promoted over a
+lower-scoring baseline reference. The promoted artifact (filename
+recorded in \texttt{data/artifacts/promotion.json}) contains a system
+prompt oriented around ``specific historical events or figures,'' a
+preference for Wikipedia and official records, a stopping heuristic
+of ``stop once the main entity is confirmed from a reliable source,''
+a \texttt{typical\_hop\_count} of 3, and two bridge-style few-shots.
+No hand-editing was applied; the artifact is exactly what the
+distiller emitted. The held-out test in Table~\ref{tab:main} is the
+honest signal: on 50 unseen questions the specialized agent beats the
+baseline by +0.060 EM and +0.069 F1.
+
+\subsection{Qualitative observations}
+
+\begin{itemize}[leftmargin=*]
+    \item The biggest failure mode for the generic baseline on bridge
+          questions is stopping too early: the agent retrieves the first
+          page, extracts a plausible-looking entity, and answers without
+          chasing the second hop. The specialized stopping heuristic
+          (``confirm the main entity'') pushes against this but does not
+          eliminate it.
+    \item Comparison questions are a different regime: they need two
+          parallel retrievals and an actual comparison step. A single
+          stopping heuristic tuned on bridge trajectories is a poor fit;
+          a richer artifact would condition on question type.
+    \item The closed-book arm is a surprisingly strong contamination
+          signal on this slice: it ties the generic baseline at EM =
+          0.200 / F1 = 0.337 on 50 questions. That does not mean the
+          agent is useless --- the specialized arm still beats both ---
+          but it does mean a fair chunk of the generic agent's score
+          on this dataset is reachable without any retrieval, and any
+          future improvement should be read against that floor.
+\end{itemize}
+
+\section{Limitations and honest caveats}
+
+\begin{itemize}[leftmargin=*]
+    \item \textbf{Small evaluation.} The reported numbers are on 50
+          held-out questions at a single seed, not the full 160 $\times$
+          3 seeds the code supports. At $n = 50$ the standard error on
+          F1 is on the order of $\pm 0.07$, so the $+0.069$ F1 gap
+          between specialized and baseline is suggestive, not
+          conclusive. Rerunning on the full split and averaging over
+          seeds is the obvious next step.
+    \item \textbf{Small self-check split.} The growth phase used a
+          5-question self-check subset, which is a very noisy signal
+          for a 0.03 promotion margin; a candidate could easily be
+          promoted by luck. A bigger self-check ($\sim$100 questions)
+          with bootstrapped confidence intervals would be much safer.
+    \item \textbf{Single model.} Results are for one pinned model. A
+          different base model might shift the baseline so far up or
+          down that the artifact is no longer the right specialization.
+    \item \textbf{Wikipedia-only tools.} Any question whose answer is not
+          on English Wikipedia is unreachable. This is fine for HotpotQA
+          by construction but is not a general deep-research agent.
+    \item \textbf{One class of task.} The agent specializes for
+          HotpotQA-shaped multi-hop QA. Cross-class generalization (can
+          it re-specialize for, e.g., scientific QA?) is not tested.
+    \item \textbf{Artifact not adversarially checked.} The distiller can
+          write whatever it wants into \texttt{source\_preferences};
+          nothing enforces that those sources are actually reachable or
+          preferred by the tools. A next iteration should make the
+          artifact executable in a tighter loop.
+\end{itemize}
+
+\section{Reproducibility}
+
+All randomness is seeded and the sample is committed. A full rerun from
+a clean clone is five commands:
+
+\begin{lstlisting}
+pip install -e ".[dev]"
+python scripts/run_eval.py   --arm closed_book  --seed 0
+python scripts/run_eval.py   --arm baseline     --seed 0
+python scripts/run_growth.py
+python scripts/run_eval.py   --arm specialized  \
+    --artifact data/artifacts/$(jq -r .artifact_path \
+        data/artifacts/promotion.json) --seed 0
+python scripts/summarize_results.py
+\end{lstlisting}
+
+The repository layout, tool catalog, prompt templates, and test suite
+are described in \texttt{README.md}. Thirty-two unit tests cover the
+metric normalization, artifact schema round-trips, tool caching and URL
+routing (with network stubbed), the ReAct loop under a scripted model,
+split determinism, the runner, the growth orchestration, and the
+promotion/rejection logic on disk.
+
+\section{What I would do next}
+
+\begin{enumerate}[leftmargin=*]
+    \item Condition the artifact on question type (bridge vs.\
+          comparison) and let the agent pick which sub-prompt to load.
+    \item Replace the scalar promotion margin with a bootstrapped
+          confidence interval over the self-check split, so promotion
+          is gated on ``candidate is plausibly better'' rather than a
+          point estimate.
+    \item Add a second tool class (e.g., a structured Wikidata query)
+          and let the artifact express preferences over tools, not just
+          sources.
+    \item Run a true cross-domain test: grow on HotpotQA, evaluate on a
+          disjoint QA benchmark, and measure how much of the gain was
+          HotpotQA-shape-specific vs. genuinely useful specialization.
+\end{enumerate}
+
+\end{document}
