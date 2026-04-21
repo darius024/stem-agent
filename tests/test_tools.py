@@ -2,25 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from stem_agent.tools import fetch, search
-
-
-class FakeResponse:
-    def __init__(self, json_data=None, text: str = "") -> None:
-        self._json = json_data or {}
-        self.text = text
-
-    def raise_for_status(self) -> None:
-        return None
-
-    def json(self):
-        return self._json
 
 
 @pytest.fixture
@@ -39,8 +26,8 @@ def test_search_returns_cleaned_results_and_caches(_redirect_cache, monkeypatch)
             ]
         }
     }
-    fake_get = MagicMock(return_value=FakeResponse(json_data=payload))
-    monkeypatch.setattr("stem_agent.tools.search.httpx.get", fake_get)
+    fake_get = MagicMock(return_value=payload)
+    monkeypatch.setattr("stem_agent.tools.search.get_json", fake_get)
 
     first = search.search("who is obama")
     second = search.search("who is obama")
@@ -53,23 +40,21 @@ def test_search_returns_cleaned_results_and_caches(_redirect_cache, monkeypatch)
 
 def test_open_url_uses_extracts_endpoint_for_wikipedia(_redirect_cache, monkeypatch):
     payload = {"query": {"pages": [{"extract": "Paris is the capital of France."}]}}
-    fake_get = MagicMock(return_value=FakeResponse(json_data=payload))
-    monkeypatch.setattr("stem_agent.tools.fetch.httpx.get", fake_get)
+    fake_get = MagicMock(return_value=payload)
+    monkeypatch.setattr("stem_agent.tools.fetch.get_json", fake_get)
 
     text_a = fetch.open_url("https://en.wikipedia.org/wiki/Paris")
     text_b = fetch.open_url("https://en.wikipedia.org/wiki/Paris")
 
     assert fake_get.call_count == 1
     assert text_a == text_b == "Paris is the capital of France."
-    call_args = fake_get.call_args
-    assert call_args.args[0] == fetch.WIKI_API
-    assert call_args.kwargs["params"]["titles"] == "Paris"
+    assert fake_get.call_args.kwargs["params"]["titles"] == "Paris"
 
 
 def test_open_url_falls_back_to_html_for_non_wikipedia(_redirect_cache, monkeypatch):
     html = "<html><body><p>Hello</p><script>alert('x')</script> world </body></html>"
-    fake_get = MagicMock(return_value=FakeResponse(text=html))
-    monkeypatch.setattr("stem_agent.tools.fetch.httpx.get", fake_get)
+    fake_get = MagicMock(return_value=html)
+    monkeypatch.setattr("stem_agent.tools.fetch.get_text", fake_get)
 
     text = fetch.open_url("https://example.com/post")
 

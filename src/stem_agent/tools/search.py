@@ -12,13 +12,11 @@ import json
 import re
 from pathlib import Path
 
-import httpx
-
 from stem_agent.config import CACHE_DIR
+from stem_agent.tools._http import get_json
 
 WIKI_API = "https://en.wikipedia.org/w/api.php"
 SEARCH_LIMIT = 5
-REQUEST_TIMEOUT = 20.0
 
 
 def _cache_path(query: str) -> Path:
@@ -39,7 +37,7 @@ def search(query: str) -> list[dict]:
     if cache.exists():
         return json.loads(cache.read_text())
 
-    response = httpx.get(
+    payload = get_json(
         WIKI_API,
         params={
             "action": "query",
@@ -49,10 +47,8 @@ def search(query: str) -> list[dict]:
             "format": "json",
             "formatversion": 2,
         },
-        timeout=REQUEST_TIMEOUT,
     )
-    response.raise_for_status()
-    hits = response.json().get("query", {}).get("search", [])
+    hits = payload.get("query", {}).get("search", [])
     results = [
         {
             "title": hit["title"],
