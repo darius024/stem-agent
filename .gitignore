@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Env
+.env
+
+# Local data
+data/cache/*
+data/results/*
+data/artifacts/*
+!data/cache/.gitkeep
+!data/results/.gitkeep
+!data/artifacts/.gitkeep
+!data/hotpot_sample.json
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
