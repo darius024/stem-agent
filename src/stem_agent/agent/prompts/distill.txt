@@ -1,11 +1,32 @@
-You will be given a set of scout trajectories and their gold answers. Produce
-a specialization artifact as JSON with the following fields:
+You are studying a small set of research trajectories so that a later agent
+can do this kind of question better. You are given:
 
-- query_style_rules: short bullet rules for phrasing search queries.
-- source_preferences: {"prefer": [...], "avoid": [...]} domain patterns.
-- stopping_heuristic: one sentence describing when the agent should stop.
-- typical_hop_count: integer, the number of hops that was usually enough.
-- few_shots: up to 3 compact examples (question, trajectory summary, answer).
-- system_prompt: a new system prompt that combines the above rules.
+- a list of trajectories, each with the question, the gold answer, the
+  agent's prediction, the F1 of that prediction, and the tool calls the
+  agent made;
+- optionally, a previous artifact that was produced earlier and not
+  accepted, with a note about what to improve.
 
-Only output the JSON object. No commentary.
+Produce a specialization artifact. It must be a single JSON object with
+exactly these keys, and nothing else:
+
+{
+  "query_style_rules":    [ "...", ... ],
+  "source_preferences":   { "prefer": [ "..." ], "avoid": [ "..." ] },
+  "stopping_heuristic":   "one short sentence",
+  "typical_hop_count":    <integer, usually between 2 and 5>,
+  "few_shots":            [ { "question": "...", "trajectory": "...", "answer": "..." }, ... ],
+  "system_prompt":        "a short system prompt for the specialized agent"
+}
+
+Guidance:
+- Keep each rule short and concrete (5-20 words). Generic advice like
+  "be accurate" is not useful.
+- `stopping_heuristic` should describe when the agent can stop searching,
+  grounded in what the trajectories actually show (e.g. "stop once the
+  bridge entity is confirmed on a second page").
+- Include at most 3 few-shots. Prefer trajectories whose F1 was high and
+  whose pattern is likely to generalize to similar questions.
+- `system_prompt` must not exceed about 120 words. It replaces the baseline
+  system prompt for the specialized agent.
+- Output only the JSON object. No commentary, no markdown fences.
