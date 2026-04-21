@@ -6,7 +6,7 @@ import time
 
 import httpx
 
-USER_AGENT = "stem-agent/0.0.1 (JetBrains internship project; +https://github.com/)"
+USER_AGENT = "stem-agent/0.0.1 (research prototype; contact via repository)"
 DEFAULT_TIMEOUT = 20.0
 MAX_ATTEMPTS = 3
 BACKOFF_SECONDS = 0.5

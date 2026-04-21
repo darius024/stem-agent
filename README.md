@@ -5,9 +5,6 @@ small budget studying a training set of multi-hop questions, writes itself a
 short specialization artifact, and then answers held-out questions using that
 artifact. The before/after comparison is run on a fixed sample of HotpotQA.
 
-This is a student project built as a submission for the JetBrains AI
-Engineering internship (Task #1: Stem Agent).
-
 ## Setup
 
 Requires Python 3.11+.
