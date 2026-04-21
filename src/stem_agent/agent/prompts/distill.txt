@@ -1,0 +1,11 @@
+You will be given a set of scout trajectories and their gold answers. Produce
+a specialization artifact as JSON with the following fields:
+
+- query_style_rules: short bullet rules for phrasing search queries.
+- source_preferences: {"prefer": [...], "avoid": [...]} domain patterns.
+- stopping_heuristic: one sentence describing when the agent should stop.
+- typical_hop_count: integer, the number of hops that was usually enough.
+- few_shots: up to 3 compact examples (question, trajectory summary, answer).
+- system_prompt: a new system prompt that combines the above rules.
+
+Only output the JSON object. No commentary.

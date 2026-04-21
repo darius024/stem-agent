@@ -1,0 +1,7 @@
+You will be shown a small set of training questions together with their gold
+answers. For each question, try to solve it using the available tools and
+record your full trajectory (thoughts, actions, observations).
+
+Your goal here is not to maximize accuracy. It is to produce trajectories that
+are useful for a later "distill" step which will look at successes and
+failures and write a specialization artifact.
